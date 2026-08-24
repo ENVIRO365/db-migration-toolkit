@@ -6,8 +6,8 @@
 |------|--------|----------|------|
 | Gate 1 — Environment | PASSED | Python 3.12.3, PG MCP verified (cis-lh-adapter-dev), DB2 MCP verified (WEALTH), 66GB disk | 2026-08-24 |
 | Gate 2 — Database Discovery | PASSED | Source: 28 PG tables (26 business + 2 infra), Target: 26 DB2 tables. Identity strategies match. FK relationships verified. | 2026-08-24 |
-| Gate 3 — Rollback Design | IN PROGRESS | Architecture designed, adapter contract defined, dependency graph built | 2026-08-24 |
-| Gate 4 — Proof of Concept | PENDING | | |
+| Gate 3 — Rollback Design | PASSED | Architecture designed, 18 source files, all imports verified, adapter contract defined, dependency graph built | 2026-08-24 |
+| Gate 4 — Proof of Concept | PASSED | 120 unit + 27 integration tests pass. CLI compare/validate/plan work end-to-end against live PG+DB2. Delta strip for unauthorised DELETEs working. | 2026-08-24 |
 | Gate 5 — Performance | PENDING | | |
 | Gate 6 — Full Implementation | PENDING | | |
 | Gate 7 — Non-Production Validation | PENDING | | |
@@ -18,7 +18,7 @@
 
 | Table | Operation | Row Count | Rationale |
 |-------|-----------|-----------|-----------|
-| adapterconfig | INSERT | ~105 | DB2 has 423, PG has 528. Delta INSERT only |
+| adapterconfig | INSERT | 28 | PG has 436, DB2 has 425. 28 INSERTs, 17 DB2-only rows preserved (DELETEs stripped) |
 | directorylocation | NO_ACTION | 0 | Both have 4 rows, identical |
 | emailaddress | NO_ACTION | 0 | Both have 5985 rows, identical |
 | emailgroup | NO_ACTION | 0 | Both have 257 rows, identical |
