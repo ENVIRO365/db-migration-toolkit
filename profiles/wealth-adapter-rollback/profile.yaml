@@ -1,0 +1,98 @@
+name: wealth-adapter-rollback
+description: "Rollback Wealth Adapter data from PostgreSQL back to DB2"
+
+source:
+  type: postgresql
+  schema: wealthadapter
+  dsn_env: WA_SOURCE_DSN
+
+target:
+  type: db2
+  schema: WEALTHADAPTER
+  dsn_env: WA_TARGET_DSN
+
+migration:
+  mode: rollback
+  batch_size: 5000
+  fetch_size: 5000
+  workers: 4
+  commit_every: 5000
+
+comparison:
+  strategy: auto
+
+performance:
+  streaming: true
+  parallel_tables: true
+
+automation:
+  mode: supervised
+  auto_confirm_below_rows: 0
+
+# Tables to skip entirely (infrastructure-only, no business data)
+skip_tables:
+  - flyway_schema_history
+  - shedlock
+  - cdc_outbox
+
+# Tables where DELETE is explicitly allowed during rollback
+# (empty in this profile — the rollback is INSERT-only for this use case
+#  because 13 DB2 tables are empty and need full import, while 7 are in sync)
+delete_allowed_tables: []
+
+known_quirks:
+  - table: userdetail
+    note: >
+      DB2 has 3 triggers (NEW_USERDETAIL, UPDATE_USERDETAIL, DELETE_USERDETAIL) 
+      that INSERT into WEALTH.CHGDATALOG. These triggers are ACTIVE in DB2 and 
+      will fire during rollback data import — this is acceptable behavior since 
+      WEALTH.CHGDATALOG exists in the same DB2 instance. 
+      In PostgreSQL, equivalent triggers exist but are NON-FUNCTIONAL because 
+      wealth.chgdatalog does not exist in the adapter PG database.
+      Before importing to PG (if ever needed): DISABLE TRIGGER ALL first.
+
+  - table: facsmessageentity
+    note: >
+      PG has an extra column 'latest_history_date' (added by V9 Flyway migration) 
+      not present in DB2. Must be excluded from rollback SELECT.
+
+  - table: jmssystemadaptermessage
+    note: >
+      PG has an extra column 'latest_status_date' (added by V9 Flyway migration) 
+      not present in DB2. Must be excluded from rollback SELECT.
+
+  - table: webservice
+    note: >
+      Has NO identity column — ID is application-managed. No sequence reset needed.
+      IDs must be explicitly provided in INSERT statements.
+
+  - table: remote_interaction_log
+    note: >
+      GENERATED ALWAYS identity on both PG and DB2. DB2 requires LOAD utility with 
+      IDENTITYOVERRIDE or ALTER to BY DEFAULT. Sequence at 45.6M despite only 164 rows 
+      (bulk deletion by scheduled batch job). Accept small data gap if rollback urgent.
+
+  - table: incomingfile
+    note: >
+      GENERATED ALWAYS identity on both PG and DB2. DB2 requires LOAD utility with 
+      IDENTITYOVERRIDE or ALTER to BY DEFAULT.
+
+  - table: outboundemail
+    note: >
+      GENERATED ALWAYS identity on both PG and DB2. DB2 requires LOAD utility with 
+      IDENTITYOVERRIDE or ALTER to BY DEFAULT. Contains XML content (xmlcontent column).
+
+  - table: voc_message_log
+    note: >
+      GENERATED ALWAYS identity on both PG and DB2. DB2 requires LOAD utility with 
+      IDENTITYOVERRIDE or ALTER to BY DEFAULT. Currently 0 rows in PG.
+      voc_message_log_id_seq has cache_size=20 (all others use 1).
+
+  - table: systemstatuslog
+    note: >
+      Only 18 rows; actively pruned by SystemStatusManager.java. Accept data gap.
+
+  - table: adapterconfig
+    note: >
+      Delta INSERT only — DB2 has 423 rows, PG has 528 rows. 
+      ~105 new config entries added during PG operation.

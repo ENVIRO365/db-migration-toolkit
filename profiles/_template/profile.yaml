@@ -1,0 +1,34 @@
+name: <profile-name>
+description: "<description of this migration use case>"
+
+source:
+  type: <postgresql|db2|mysql|mssql|oracle|sqlite>
+  schema: <schema_name>
+  dsn_env: <ENV_VAR_NAME_FOR_SOURCE_DSN>
+
+target:
+  type: <postgresql|db2|mysql|mssql|oracle|sqlite>
+  schema: <schema_name>
+  dsn_env: <ENV_VAR_NAME_FOR_TARGET_DSN>
+
+migration:
+  mode: sync  # sync | rollback
+  batch_size: 5000
+  fetch_size: 5000
+  workers: 4
+  commit_every: 5000
+
+comparison:
+  strategy: auto  # auto | row_count | primary_key | checksum | timestamp
+
+performance:
+  streaming: true
+  parallel_tables: true
+
+automation:
+  mode: supervised  # supervised | auto_non_prod | auto_approved
+  auto_confirm_below_rows: 0
+
+skip_tables: []
+delete_allowed_tables: []
+known_quirks: []
