@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Optional
 
 import click
+from dotenv import load_dotenv
+
+# Auto-load .env from project root (no need for 'export' or 'set -a')
+load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 from dbmigrate.config import list_profiles, load_profile
 from dbmigrate.logging import configure_logging

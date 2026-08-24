@@ -315,27 +315,10 @@ class PostgreSQLAdapter(Database):
         """Return all sequences (identity-owned and standalone)."""
         sql = """
             SELECT
-                s.sequence_name,
-                s.start_value::bigint,
-                s.increment::bigint,
-                s.cache_value::bigint,
-                pg_get_serial_sequence(c.table_name, c.column_name) IS NOT NULL AS is_identity,
-                c.table_name AS assoc_table,
-                c.column_name AS assoc_column
-            FROM information_schema.sequences s
-            LEFT JOIN information_schema.columns c
-                ON c.column_default LIKE '%%' || s.sequence_name || '%%'
-                AND c.table_schema = s.sequence_schema
-            WHERE s.sequence_schema = %s
-            ORDER BY s.sequence_name
-        """
-        # Simpler, more robust approach using pg_catalog
-        sql = """
-            SELECT
                 seq.relname AS sequence_name,
                 s.start_value,
                 s.increment_by,
-                s.cache_value,
+                s.cache_size,
                 d.refobjid IS NOT NULL AS is_identity,
                 tab.relname AS assoc_table,
                 a.attname AS assoc_column

@@ -355,3 +355,9 @@ class Database(ABC):
     ) -> Generator[list[int], None, None]:
         """Yield primary-key values in sorted batches for delta comparison."""
         ...
+
+
+# ---------------------------------------------------------------------------
+# Eagerly import adapters so @register_adapter decorators execute
+# ---------------------------------------------------------------------------
+from dbmigrate.database import postgresql as _pg, db2 as _db2  # noqa: E402, F401

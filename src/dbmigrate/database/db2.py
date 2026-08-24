@@ -411,36 +411,28 @@ class DB2Adapter(Database):
 
         Both standalone sequences and identity sequences are returned;
         identity sequences have ``SEQTYPE = 'I'`` and are linked to their
-        owning table/column.
+        owning table/column via ``SYSCAT.COLIDENTATTRIBUTES.SEQID``.
         """
         cursor = self.execute(
-            "SELECT SEQNAME, SEQTYPE, START, INCREMENT, CACHE, "
-            "       LASTASSIGNEDVAL, TABNAME, COLNAME "
+            "SELECT s.SEQNAME, s.SEQTYPE, s.START, s.INCREMENT, s.CACHE, "
+            "       s.NEXTCACHEFIRSTVALUE, cia.TABNAME, cia.COLNAME "
             "FROM SYSCAT.SEQUENCES s "
-            "LEFT JOIN ( "
-            "    SELECT c.TABNAME, c.COLNAME, c.TABSCHEMA, "
-            "           i.SEQNAME AS ISEQNAME "
-            "    FROM SYSCAT.COLUMNS c "
-            "    JOIN SYSCAT.SEQUENCES i "
-            "      ON i.SEQSCHEMA = c.TABSCHEMA "
-            "         AND i.SEQTYPE = 'I' "
-            "         AND i.TABNAME = c.TABNAME "
-            "    WHERE c.IDENTITY = 'Y' AND c.TABSCHEMA = ? "
-            ") ic ON ic.ISEQNAME = s.SEQNAME AND ic.TABSCHEMA = s.SEQSCHEMA "
+            "LEFT JOIN SYSCAT.COLIDENTATTRIBUTES cia "
+            "    ON cia.SEQID = s.SEQID AND cia.TABSCHEMA = s.SEQSCHEMA "
             "WHERE s.SEQSCHEMA = ? "
             "ORDER BY s.SEQNAME",
-            (_uc(self.schema), _uc(self.schema)),
+            (_uc(self.schema),),
         )
         sequences: list[SequenceMetadata] = []
         for row in cursor.fetchall():
-            seqname, seqtype, start, incr, cache, lastval, tabname, colname = row
+            seqname, seqtype, start, incr, cache, nextval, tabname, colname = row
             sequences.append(
                 SequenceMetadata(
                     name=_lc(seqname),
                     start_value=int(start) if start is not None else 1,
                     increment=int(incr) if incr is not None else 1,
                     cache_size=int(cache) if cache is not None else 1,
-                    last_value=int(lastval) if lastval is not None else None,
+                    last_value=int(nextval) if nextval is not None else None,
                     is_identity_sequence=(seqtype == "I"),
                     associated_table=_lc(tabname) if tabname else None,
                     associated_column=_lc(colname) if colname else None,
