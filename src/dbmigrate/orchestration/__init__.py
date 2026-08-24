@@ -375,18 +375,18 @@ class PipelineOrchestrator:
                 continue
 
             tbl_meta = source_meta.tables.get(table_name)
-            if not tbl_meta or not tbl_meta.primary_key or tbl_meta.primary_key.is_composite:
+            pk_cols = self._resolve_pk_columns(table_name, tbl_meta)
+            if not pk_cols:
                 logger.warning(
-                    "Skipping delta detection for '%s' — no single-column PK", table_name
+                    "Skipping delta detection for '%s' — no PK (real or virtual)", table_name
                 )
                 continue
 
-            pk_col = tbl_meta.primary_key.columns[0]
-            columns = [c.name for c in tbl_meta.columns]
+            columns = [c.name for c in tbl_meta.columns] if tbl_meta else []
 
             log_event(migration_id, "COMPARE", table_name, None, "delta_start")
             delta = detector.detect_delta(
-                source_db, target_db, table_name, pk_col, columns, strategy,
+                source_db, target_db, table_name, pk_cols, columns, strategy,
             )
             deltas[table_name] = delta
             log_event(migration_id, "COMPARE", table_name, None, "delta_complete", {
@@ -400,6 +400,26 @@ class PipelineOrchestrator:
             "tables_compared": len(deltas),
         })
         return {"schema_result": schema_result, "deltas": deltas}
+
+    def _resolve_pk_columns(
+        self,
+        table_name: str,
+        tbl_meta: Any,
+    ) -> list[str]:
+        """Resolve PK columns for a table: real PK > virtual PK > empty.
+
+        Returns an empty list if no PK can be determined (table will be skipped).
+        """
+        # 1. Check for a virtual PK override in profile config
+        virtual = self._profile.virtual_pk.get(table_name.lower())
+        if virtual:
+            return virtual
+
+        # 2. Use real PK from metadata (single or composite)
+        if tbl_meta and tbl_meta.primary_key and tbl_meta.primary_key.columns:
+            return [c.lower() for c in tbl_meta.primary_key.columns]
+
+        return []
 
     def _stage_plan(
         self,
@@ -457,6 +477,10 @@ class PipelineOrchestrator:
             # Column mappings from schema comparison
             mappings = schema_result.column_mappings.get(table_name, []) if schema_result else []
 
+            # Resolve PK columns (real or virtual)
+            tbl_meta = source_meta.tables.get(table_name)
+            pk_cols = self._resolve_pk_columns(table_name, tbl_meta)
+
             plan = MigrationTablePlan(
                 table_name=table_name,
                 operation=operation,
@@ -464,6 +488,7 @@ class PipelineOrchestrator:
                 dependency_level=level,
                 column_mappings=mappings,
                 delta=delta,
+                pk_columns=pk_cols,
             )
             table_plans.append(plan)
             total_rows += row_count
@@ -645,7 +670,9 @@ class PipelineOrchestrator:
         # Only include columns that exist in BOTH source and target
         source_columns = [m.source_column for m in plan.column_mappings if not m.target_only and not m.source_only]
         target_columns = [m.target_column for m in plan.column_mappings if not m.target_only and not m.source_only]
-        pk_col = source_columns[0] if source_columns else "id"  # Fallback; real PK comes from metadata
+
+        # Use resolved pk_columns from plan; fallback to first column
+        pk_cols = plan.pk_columns if plan.pk_columns else [source_columns[0]] if source_columns else ["id"]
 
         total = 0
 
@@ -653,7 +680,7 @@ class PipelineOrchestrator:
         if delta.insert_pks:
             for i in range(0, len(delta.insert_pks), batch_size):
                 batch_pks = delta.insert_pks[i : i + batch_size]
-                rows = source_db.fetch_rows_by_keys(table_name, source_columns, pk_col, batch_pks)
+                rows = source_db.fetch_rows_by_keys(table_name, source_columns, pk_cols, batch_pks)
                 if rows:
                     row_tuples = [tuple(row.get(c) for c in source_columns) for row in rows]
                     inserted = target_db.insert_batch(
@@ -663,27 +690,33 @@ class PipelineOrchestrator:
 
         # UPDATEs
         if delta.update_pks:
-            update_src_cols = [c for c in source_columns if c != pk_col]
-            update_tgt_cols = [c for c in target_columns if c != target_columns[0]]  # skip PK
+            # Exclude PK columns from update set
+            pk_set = set(c.lower() for c in pk_cols)
+            update_src_cols = [c for c in source_columns if c.lower() not in pk_set]
+            update_tgt_cols = [c for c in target_columns if c.lower() not in pk_set]
             for i in range(0, len(delta.update_pks), batch_size):
                 batch_pks = delta.update_pks[i : i + batch_size]
-                rows = source_db.fetch_rows_by_keys(table_name, source_columns, pk_col, batch_pks)
+                rows = source_db.fetch_rows_by_keys(table_name, source_columns, pk_cols, batch_pks)
                 if rows:
+                    # Row tuples: (update_col1, ..., update_colN, pk_col1, ..., pk_colN)
                     row_tuples = [
-                        tuple(row.get(c) for c in update_src_cols) + (row.get(pk_col),)
+                        tuple(row.get(c) for c in update_src_cols)
+                        + tuple(row.get(c) for c in pk_cols)
                         for row in rows
                     ]
-                    pk_tgt_col = target_columns[0]
-                    updated = target_db.update_batch(table_name, [pk_tgt_col], update_tgt_cols, row_tuples)
+                    updated = target_db.update_batch(table_name, pk_cols, update_tgt_cols, row_tuples)
                     total += updated
 
         # DELETEs
         if delta.delete_pks:
-            pk_tgt_col = target_columns[0] if target_columns else "id"
             for i in range(0, len(delta.delete_pks), batch_size):
                 batch_pks = delta.delete_pks[i : i + batch_size]
-                pk_tuples = [(pk,) for pk in batch_pks]
-                deleted = target_db.delete_batch(table_name, [pk_tgt_col], pk_tuples)
+                # Normalise to tuples for delete_batch
+                if len(pk_cols) == 1:
+                    pk_tuples = [(pk,) for pk in batch_pks]
+                else:
+                    pk_tuples = [pk if isinstance(pk, tuple) else (pk,) for pk in batch_pks]
+                deleted = target_db.delete_batch(table_name, pk_cols, pk_tuples)
                 total += deleted
 
         return total

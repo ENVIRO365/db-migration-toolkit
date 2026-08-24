@@ -505,18 +505,43 @@ class PostgreSQLAdapter(Database):
     def stream_primary_keys(
         self,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         batch_size: int = 10000,
-    ) -> Generator[list[int], None, None]:
-        """Yield sorted PK values in batches using keyset pagination."""
+    ) -> Generator[list[Any], None, None]:
+        """Yield sorted PK values in batches using keyset pagination.
+
+        For single-column PKs, yields lists of scalar values.
+        For composite PKs, yields lists of tuples.
+        """
         fq = _qualified(self.schema, table_name)
+
+        if len(pk_columns) == 1:
+            # Single-column PK: keyset pagination on scalar
+            yield from self._stream_pks_single(fq, pk_columns[0], batch_size)
+        else:
+            # Composite PK: OFFSET/LIMIT pagination (safe for small tables)
+            yield from self._stream_pks_composite(fq, pk_columns, batch_size)
+
+    def _stream_pks_single(
+        self,
+        fq_table: str,
+        pk_column: str,
+        batch_size: int,
+    ) -> Generator[list[Any], None, None]:
+        """Keyset pagination for single-column PKs."""
         pk_col = _quote_ident(pk_column)
-        last_pk = -1
+        last_pk: Any = None
 
         while True:
-            sql = f"SELECT {pk_col} FROM {fq} WHERE {pk_col} > %s ORDER BY {pk_col} LIMIT %s"  # noqa: S608
+            if last_pk is None:
+                sql = f"SELECT {pk_col} FROM {fq_table} ORDER BY {pk_col} LIMIT %s"  # noqa: S608
+                params: tuple[Any, ...] = (batch_size,)
+            else:
+                sql = f"SELECT {pk_col} FROM {fq_table} WHERE {pk_col} > %s ORDER BY {pk_col} LIMIT %s"  # noqa: S608
+                params = (last_pk, batch_size)
+
             with self._cursor() as cur:
-                cur.execute(sql, (last_pk, batch_size))
+                cur.execute(sql, params)
                 rows = cur.fetchall()
             if not rows:
                 break
@@ -526,24 +551,67 @@ class PostgreSQLAdapter(Database):
             if len(rows) < batch_size:
                 break
 
+    def _stream_pks_composite(
+        self,
+        fq_table: str,
+        pk_columns: list[str],
+        batch_size: int,
+    ) -> Generator[list[Any], None, None]:
+        """OFFSET/LIMIT pagination for composite PKs (small tables)."""
+        col_list = ", ".join(_quote_ident(c) for c in pk_columns)
+        order_clause = ", ".join(_quote_ident(c) for c in pk_columns)
+        offset = 0
+
+        while True:
+            sql = f"SELECT {col_list} FROM {fq_table} ORDER BY {order_clause} LIMIT %s OFFSET %s"  # noqa: S608
+            with self._cursor() as cur:
+                cur.execute(sql, (batch_size, offset))
+                rows = cur.fetchall()
+            if not rows:
+                break
+            pks = [tuple(r) for r in rows]
+            yield pks
+            offset += len(rows)
+            if len(rows) < batch_size:
+                break
+
     def fetch_rows_by_keys(
         self,
         table_name: str,
         columns: list[str],
-        pk_column: str,
+        pk_columns: list[str],
         pk_values: list[Any],
     ) -> list[dict[str, Any]]:
-        """Fetch specific rows by primary key values."""
+        """Fetch specific rows by primary key values.
+
+        For single-column PKs, *pk_values* is a flat list of scalars.
+        For composite PKs, *pk_values* is a list of tuples.
+        """
         if not pk_values:
             return []
         fq = _qualified(self.schema, table_name)
         col_list = ", ".join(_quote_ident(c) for c in columns)
-        pk_col = _quote_ident(pk_column)
-        placeholders = ", ".join(["%s"] * len(pk_values))
-        sql = f"SELECT {col_list} FROM {fq} WHERE {pk_col} IN ({placeholders}) ORDER BY {pk_col}"  # noqa: S608
+
+        if len(pk_columns) == 1:
+            # Single-column: simple IN clause
+            pk_col = _quote_ident(pk_columns[0])
+            placeholders = ", ".join(["%s"] * len(pk_values))
+            sql = f"SELECT {col_list} FROM {fq} WHERE {pk_col} IN ({placeholders}) ORDER BY {pk_col}"  # noqa: S608
+            params = tuple(pk_values)
+        else:
+            # Composite: WHERE (c1, c2) IN ((v1, v2), ...)
+            pk_col_list = ", ".join(_quote_ident(c) for c in pk_columns)
+            row_placeholders = ", ".join(
+                "(" + ", ".join(["%s"] * len(pk_columns)) + ")"
+                for _ in pk_values
+            )
+            order_clause = ", ".join(_quote_ident(c) for c in pk_columns)
+            sql = f"SELECT {col_list} FROM {fq} WHERE ({pk_col_list}) IN ({row_placeholders}) ORDER BY {order_clause}"  # noqa: S608
+            # Flatten tuples into params
+            params = tuple(v for row in pk_values for v in row)
 
         with self._cursor() as cur:
-            cur.execute(sql, tuple(pk_values))
+            cur.execute(sql, params)
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
     # ------------------------------------------------- data mutation

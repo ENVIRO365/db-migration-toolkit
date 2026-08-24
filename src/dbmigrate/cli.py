@@ -29,6 +29,16 @@ def _setup_logging(verbose: bool = False) -> None:
     configure_logging(level=level)
 
 
+def _resolve_pk_columns(cfg, table_name: str, tbl_meta) -> list[str]:
+    """Resolve PK columns: virtual_pk > real PK > empty (skip)."""
+    virtual = cfg.virtual_pk.get(table_name.lower())
+    if virtual:
+        return virtual
+    if tbl_meta and tbl_meta.primary_key and tbl_meta.primary_key.columns:
+        return [c.lower() for c in tbl_meta.primary_key.columns]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Root group
 # ---------------------------------------------------------------------------
@@ -164,12 +174,12 @@ def compare(ctx: click.Context, profile: str, table: Optional[str]) -> None:
             if tname in cfg.skip_tables:
                 continue
             tbl_meta = source_meta.tables.get(tname)
-            if not tbl_meta or not tbl_meta.primary_key or tbl_meta.primary_key.is_composite:
+            pk_cols = _resolve_pk_columns(cfg, tname, tbl_meta)
+            if not pk_cols:
                 continue
-            pk_col = tbl_meta.primary_key.columns[0]
-            columns = [c.name for c in tbl_meta.columns]
+            columns = [c.name for c in tbl_meta.columns] if tbl_meta else []
             delta = detector.detect_delta(
-                source_db, target_db, tname, pk_col, columns, cfg.comparison.strategy,
+                source_db, target_db, tname, pk_cols, columns, cfg.comparison.strategy,
             )
             ins_color = "green" if delta.insert_pks else None
             upd_color = "yellow" if delta.update_pks else None

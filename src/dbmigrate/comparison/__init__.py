@@ -327,7 +327,7 @@ class DeltaDetector:
         source_db: Database,
         target_db: Database,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         columns: list[str],
         strategy: ComparisonStrategy = ComparisonStrategy.AUTO,
     ) -> TableDelta:
@@ -341,8 +341,8 @@ class DeltaDetector:
             Connected adapter for the target database.
         table_name:
             Table to compare.
-        pk_column:
-            Primary key column name (single-column PK only).
+        pk_columns:
+            Primary key column name(s). For composite keys, pass multiple.
         columns:
             Column names to include in row-level comparison.
         strategy:
@@ -371,12 +371,12 @@ class DeltaDetector:
             return self._delta_row_count(table_name, source_count, target_count)
         elif resolved == ComparisonStrategy.PRIMARY_KEY:
             return self._delta_primary_key(
-                source_db, target_db, table_name, pk_column, columns,
+                source_db, target_db, table_name, pk_columns, columns,
                 source_count, target_count,
             )
         elif resolved == ComparisonStrategy.CHECKSUM:
             return self._delta_checksum(
-                source_db, target_db, table_name, pk_column, columns,
+                source_db, target_db, table_name, pk_columns, columns,
                 source_count, target_count,
             )
         else:
@@ -438,7 +438,7 @@ class DeltaDetector:
         source_db: Database,
         target_db: Database,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         columns: list[str],
         source_count: int,
         target_count: int,
@@ -446,8 +446,8 @@ class DeltaDetector:
         """Compare PK sets, then check common rows for updates."""
         logger.debug("PRIMARY_KEY delta: streaming PKs for '%s'", table_name)
 
-        source_pks = self._collect_all_pks(source_db, table_name, pk_column)
-        target_pks = self._collect_all_pks(target_db, table_name, pk_column)
+        source_pks = self._collect_all_pks(source_db, table_name, pk_columns)
+        target_pks = self._collect_all_pks(target_db, table_name, pk_columns)
 
         new_pks = sorted(source_pks - target_pks)
         missing_pks = sorted(target_pks - source_pks)
@@ -469,14 +469,14 @@ class DeltaDetector:
             batch_pks = common_pks[batch_start : batch_start + self.ROW_FETCH_BATCH]
 
             src_rows = source_db.fetch_rows_by_keys(
-                table_name, columns, pk_column, batch_pks
+                table_name, columns, pk_columns, batch_pks
             )
             tgt_rows = target_db.fetch_rows_by_keys(
-                table_name, columns, pk_column, batch_pks
+                table_name, columns, pk_columns, batch_pks
             )
 
-            src_map = {row[pk_column]: row for row in src_rows}
-            tgt_map = {row[pk_column]: row for row in tgt_rows}
+            src_map = {self._extract_pk(row, pk_columns): row for row in src_rows}
+            tgt_map = {self._extract_pk(row, pk_columns): row for row in tgt_rows}
 
             for pk_val in batch_pks:
                 src_row = src_map.get(pk_val)
@@ -510,7 +510,7 @@ class DeltaDetector:
         self,
         db: Database,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
     ) -> set[Any]:
         """Stream all PKs from a table into a set.
 
@@ -519,10 +519,17 @@ class DeltaDetector:
         """
         pks: set[Any] = set()
         for batch in db.stream_primary_keys(
-            table_name, pk_column, batch_size=self.PK_BATCH_SIZE
+            table_name, pk_columns, batch_size=self.PK_BATCH_SIZE
         ):
             pks.update(batch)
         return pks
+
+    @staticmethod
+    def _extract_pk(row: dict[str, Any], pk_columns: list[str]) -> Any:
+        """Extract PK value from a row dict — scalar for single, tuple for composite."""
+        if len(pk_columns) == 1:
+            return row[pk_columns[0]]
+        return tuple(row[c] for c in pk_columns)
 
     # -- CHECKSUM strategy -------------------------------------------------
 
@@ -531,7 +538,7 @@ class DeltaDetector:
         source_db: Database,
         target_db: Database,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         columns: list[str],
         source_count: int,
         target_count: int,
@@ -546,10 +553,10 @@ class DeltaDetector:
         sorted_cols = sorted(columns)
 
         source_hashes = self._build_hash_map(
-            source_db, table_name, pk_column, sorted_cols
+            source_db, table_name, pk_columns, sorted_cols
         )
         target_hashes = self._build_hash_map(
-            target_db, table_name, pk_column, sorted_cols
+            target_db, table_name, pk_columns, sorted_cols
         )
 
         src_keys = set(source_hashes.keys())
@@ -589,19 +596,21 @@ class DeltaDetector:
         self,
         db: Database,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         sorted_columns: list[str],
     ) -> dict[Any, str]:
         """Stream all rows and produce {pk: sha256_hex} mapping."""
         hash_map: dict[Any, str] = {}
+        # Use first PK column for keyset pagination ordering
+        order_col = pk_columns[0] if pk_columns else None
         for batch in db.stream_rows(
             table_name,
             sorted_columns,
-            pk_column=pk_column,
+            pk_column=order_col,
             batch_size=5000,
         ):
             for row in batch:
-                pk_val = row[pk_column]
+                pk_val = self._extract_pk(row, pk_columns)
                 row_hash = self._hash_row(row, sorted_columns)
                 hash_map[pk_val] = row_hash
         return hash_map

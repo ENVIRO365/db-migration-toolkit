@@ -614,21 +614,21 @@ class MigrationValidator:
         target_db: Database,
     ) -> ValidationResult:
         """Sample source PKs and verify they exist on the target."""
-        if not plan.column_mappings:
+        if not plan.pk_columns and not plan.column_mappings:
             return ValidationResult(
                 table_name=plan.table_name,
                 check_name="post_pk_sampling",
                 passed=True,
-                message="No column mappings — skipping PK sampling",
+                message="No PK columns — skipping PK sampling",
                 severity="info",
             )
 
-        pk_column = plan.column_mappings[0].source_column
+        pk_columns = plan.pk_columns if plan.pk_columns else [plan.column_mappings[0].source_column]
 
         # Collect a sample of source PKs
         sample_pks: list[Any] = []
         for batch in source_db.stream_primary_keys(
-            plan.table_name, pk_column, batch_size=_PK_SAMPLE_SIZE
+            plan.table_name, pk_columns, batch_size=_PK_SAMPLE_SIZE
         ):
             sample_pks.extend(batch)
             if len(sample_pks) >= _PK_SAMPLE_SIZE:
@@ -649,9 +649,13 @@ class MigrationValidator:
 
         # Check which sampled PKs exist on target
         target_rows = target_db.fetch_rows_by_keys(
-            plan.table_name, [pk_column], pk_column, sample_pks,
+            plan.table_name, pk_columns, pk_columns, sample_pks,
         )
-        found_pks = {row[pk_column] for row in target_rows}
+        # Extract PKs from result rows for comparison
+        if len(pk_columns) == 1:
+            found_pks = {row[pk_columns[0]] for row in target_rows}
+        else:
+            found_pks = {tuple(row[c] for c in pk_columns) for row in target_rows}
         missing = [pk for pk in sample_pks if pk not in found_pks]
 
         passed = len(missing) == 0
@@ -791,15 +795,15 @@ class MigrationValidator:
         """
         results: list[ValidationResult] = []
 
-        if not plan.column_mappings:
+        if not plan.pk_columns and not plan.column_mappings:
             return results
 
-        pk_column = plan.column_mappings[0].source_column
+        pk_columns = plan.pk_columns if plan.pk_columns else [plan.column_mappings[0].source_column]
 
         # Sample source PKs
         sample_pks: list[Any] = []
         for batch in source_db.stream_primary_keys(
-            plan.table_name, pk_column, batch_size=_PK_SAMPLE_SIZE
+            plan.table_name, pk_columns, batch_size=_PK_SAMPLE_SIZE
         ):
             sample_pks.extend(batch)
             if len(sample_pks) >= _PK_SAMPLE_SIZE:
@@ -813,11 +817,14 @@ class MigrationValidator:
 
         # Fetch from target
         target_rows = target_db.fetch_rows_by_keys(
-            plan.table_name, [pk_column], pk_column, sample_pks,
+            plan.table_name, pk_columns, pk_columns, sample_pks,
         )
 
         # Check for missing
-        found_pks = [row[pk_column] for row in target_rows]
+        if len(pk_columns) == 1:
+            found_pks = [row[pk_columns[0]] for row in target_rows]
+        else:
+            found_pks = [tuple(row[c] for c in pk_columns) for row in target_rows]
         found_set = set(found_pks)
         missing = [pk for pk in sample_pks if pk not in found_set]
 

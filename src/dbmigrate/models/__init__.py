@@ -211,6 +211,9 @@ class MigrationTablePlan:
     target_only_columns: list[str] = field(default_factory=list)
     requires_bulk_load: bool = False
     delta: Optional[TableDelta] = None
+    # Resolved primary key columns (single or composite / virtual).
+    # Set during planning; used by executor and validator.
+    pk_columns: list[str] = field(default_factory=list)
 
 
 @dataclass

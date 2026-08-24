@@ -40,6 +40,17 @@ skip_tables:
 #  because 13 DB2 tables are empty and need full import, while 7 are in sync)
 delete_allowed_tables: []
 
+# Virtual primary keys for tables without a real PK constraint.
+# These are user-declared logical keys (like Liquibase uniqueConstraint).
+virtual_pk:
+  emailgroup_emailaddress: [emailgroup_id, emailaddresses_id]
+  recipient_dirlocations: [recipients_id, directorylocations_id]
+  recipient_emailgroup: [recipients_id, emailgroups_id]
+  recipient_webservices: [recipients_id, webservice_id]
+  role_accessright: [role_id, accessright_id]
+  incomingfile: [id]
+  webservicestatusmessage: [id]
+
 known_quirks:
   - table: userdetail
     note: >

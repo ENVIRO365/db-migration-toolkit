@@ -217,10 +217,14 @@ class Database(ABC):
         self,
         table_name: str,
         columns: list[str],
-        pk_column: str,
+        pk_columns: list[str],
         pk_values: list[Any],
     ) -> list[dict[str, Any]]:
-        """Fetch specific rows identified by their primary key values."""
+        """Fetch specific rows identified by their primary key values.
+
+        For single-column PKs, *pk_values* is a flat list of scalars.
+        For composite PKs, *pk_values* is a list of tuples.
+        """
         ...
 
     # ---- Data mutation ----------------------------------------------------
@@ -350,10 +354,14 @@ class Database(ABC):
     def stream_primary_keys(
         self,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         batch_size: int = 10000,
-    ) -> Generator[list[int], None, None]:
-        """Yield primary-key values in sorted batches for delta comparison."""
+    ) -> Generator[list[Any], None, None]:
+        """Yield primary-key values in sorted batches for delta comparison.
+
+        For single-column PKs, each element is a scalar value.
+        For composite PKs, each element is a tuple of values.
+        """
         ...
 
 

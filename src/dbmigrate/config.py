@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from dbmigrate.models import AutomationMode, ComparisonStrategy, MigrationMode
 
@@ -74,6 +74,23 @@ class ProfileConfig(BaseModel):
     skip_tables: list[str] = []
     # Tables where DELETE is explicitly allowed in rollback mode
     delete_allowed_tables: list[str] = []
+
+    # Virtual primary keys for tables lacking a real PK constraint.
+    # Maps table_name -> list of column names forming the logical key.
+    # Example: {"recipient_emailgroup": ["recipientid", "emailgroupid"]}
+    virtual_pk: dict[str, list[str]] = {}
+
+    @field_validator("virtual_pk")
+    @classmethod
+    def _validate_virtual_pk(cls, v: dict[str, list[str]]) -> dict[str, list[str]]:
+        """Ensure each virtual PK entry has at least one column."""
+        for table, cols in v.items():
+            if not cols:
+                raise ValueError(
+                    f"virtual_pk for table '{table}' must have at least one column"
+                )
+        # Normalise table names to lowercase for consistent lookups
+        return {k.lower(): [c.lower() for c in cols] for k, cols in v.items()}
 
 
 def load_profile(

@@ -335,12 +335,12 @@ class TestDeltaDetection:
     def test_pk_delta(self, pg_adapter, db2_adapter):
         # Collect all PKs from PG (source)
         pg_pks: set[int] = set()
-        for batch in pg_adapter.stream_primary_keys(TABLE, "id", batch_size=1000):
+        for batch in pg_adapter.stream_primary_keys(TABLE, ["id"], batch_size=1000):
             pg_pks.update(batch)
 
         # Collect all PKs from DB2 (target)
         db2_pks: set[int] = set()
-        for batch in db2_adapter.stream_primary_keys(TABLE, "id", batch_size=1000):
+        for batch in db2_adapter.stream_primary_keys(TABLE, ["id"], batch_size=1000):
             db2_pks.update(batch)
 
         # Delta
@@ -364,10 +364,10 @@ class TestDeltaDetection:
         """Fetch the actual row data for the delta PKs."""
         # Get delta
         pg_pks: set[int] = set()
-        for batch in pg_adapter.stream_primary_keys(TABLE, "id", batch_size=1000):
+        for batch in pg_adapter.stream_primary_keys(TABLE, ["id"], batch_size=1000):
             pg_pks.update(batch)
         db2_pks: set[int] = set()
-        for batch in db2_adapter.stream_primary_keys(TABLE, "id", batch_size=1000):
+        for batch in db2_adapter.stream_primary_keys(TABLE, ["id"], batch_size=1000):
             db2_pks.update(batch)
 
         source_only = sorted(pg_pks - db2_pks)
@@ -376,7 +376,7 @@ class TestDeltaDetection:
 
         # Fetch actual data for these PKs from PG
         columns = ["id", "key", "value"]
-        rows = pg_adapter.fetch_rows_by_keys(TABLE, columns, "id", source_only[:10])
+        rows = pg_adapter.fetch_rows_by_keys(TABLE, columns, ["id"], source_only[:10])
 
         print(f"\n  Sample delta rows from PG ({len(rows)} of {len(source_only)}):")
         for row in rows[:5]:
@@ -395,7 +395,7 @@ class TestDeltaDetection:
             source_db=pg_adapter,
             target_db=db2_adapter,
             table_name=TABLE,
-            pk_column="id",
+            pk_columns=["id"],
             columns=["id", "key", "value"],
         )
 
@@ -439,7 +439,7 @@ class TestMigrationPlan:
             source_db=pg_adapter,
             target_db=db2_adapter,
             table_name=TABLE,
-            pk_column="id",
+            pk_columns=["id"],
             columns=["id", "key", "value"],
         )
 

@@ -617,20 +617,21 @@ class BatchExecutor:
             return 0
 
         # Fetch rows by PK range from source
-        pk_column = self._get_pk_column(plan)
-        if pk_column and batch.start_pk is not None and batch.end_pk is not None:
+        pk_columns = self._get_pk_columns(plan)
+        if pk_columns and batch.start_pk is not None and batch.end_pk is not None:
             rows = self.source_db.fetch_rows_by_keys(
                 batch.table_name,
                 columns,
-                pk_column,
+                pk_columns,
                 list(range(batch.start_pk, batch.end_pk + 1)),
             )
         else:
             # Fallback: fetch all rows in the batch range
+            fallback_cols = pk_columns if pk_columns else [columns[0]]
             rows = self.source_db.fetch_rows_by_keys(
                 batch.table_name,
                 columns,
-                pk_column or columns[0],
+                fallback_cols,
                 [batch.start_pk] if batch.start_pk is not None else [],
             )
 
@@ -658,21 +659,22 @@ class BatchExecutor:
                 f"No table plan found for UPDATE on '{batch.table_name}'"
             )
 
-        pk_column = self._get_pk_column(plan)
-        if not pk_column:
+        pk_columns = self._get_pk_columns(plan)
+        if not pk_columns:
             raise MigrationError(
-                f"Cannot UPDATE table '{batch.table_name}' without a PK column"
+                f"Cannot UPDATE table '{batch.table_name}' without PK column(s)"
             )
 
         # All transferable non-PK columns
+        pk_set = set(c.lower() for c in pk_columns)
         update_columns = [
             m.source_column
             for m in plan.column_mappings
             if not m.source_only
             and not m.target_only
-            and m.source_column.lower() != pk_column.lower()
+            and m.source_column.lower() not in pk_set
         ]
-        all_columns = [pk_column] + update_columns
+        all_columns = pk_columns + update_columns
 
         # Fetch source rows for this batch's PK range
         if batch.start_pk is not None and batch.end_pk is not None:
@@ -681,21 +683,22 @@ class BatchExecutor:
             pk_values = []
 
         rows = self.source_db.fetch_rows_by_keys(
-            batch.table_name, all_columns, pk_column, pk_values,
+            batch.table_name, all_columns, pk_columns, pk_values,
         )
 
         if not rows:
             return 0
 
-        # Convert to tuples: (update_col1, ..., update_colN, pk_col)
+        # Convert to tuples: (update_col1, ..., update_colN, pk_col1, ..., pk_colN)
         row_tuples = [
-            tuple(row.get(c) for c in update_columns) + (row[pk_column],)
+            tuple(row.get(c) for c in update_columns)
+            + tuple(row.get(c) for c in pk_columns)
             for row in rows
         ]
 
         return self.target_db.update_batch(
             batch.table_name,
-            [pk_column],
+            pk_columns,
             update_columns,
             row_tuples,
         )
@@ -711,10 +714,10 @@ class BatchExecutor:
                 f"No table plan found for DELETE on '{batch.table_name}'"
             )
 
-        pk_column = self._get_pk_column(plan)
-        if not pk_column:
+        pk_columns = self._get_pk_columns(plan)
+        if not pk_columns:
             raise MigrationError(
-                f"Cannot DELETE from table '{batch.table_name}' without a PK column"
+                f"Cannot DELETE from table '{batch.table_name}' without PK column(s)"
             )
 
         if batch.start_pk is not None and batch.end_pk is not None:
@@ -726,22 +729,17 @@ class BatchExecutor:
             return 0
 
         return self.target_db.delete_batch(
-            batch.table_name, [pk_column], pk_values,
+            batch.table_name, pk_columns, pk_values,
         )
 
     @staticmethod
-    def _get_pk_column(plan: MigrationTablePlan) -> Optional[str]:
-        """Extract the single PK column name from column mappings.
-
-        Looks for the first column mapping whose source column name
-        matches common PK naming conventions, or falls back to the
-        first column if ambiguous.
-        """
-        if not plan.column_mappings:
-            return None
-
-        # Heuristic: first column is usually the PK
-        return plan.column_mappings[0].source_column
+    def _get_pk_columns(plan: MigrationTablePlan) -> list[str]:
+        """Return PK columns from plan.pk_columns, with fallback to first mapping."""
+        if plan.pk_columns:
+            return plan.pk_columns
+        if plan.column_mappings:
+            return [plan.column_mappings[0].source_column]
+        return []
 
 
 __all__ = [

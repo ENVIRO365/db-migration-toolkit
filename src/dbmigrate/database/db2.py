@@ -542,23 +542,49 @@ class DB2Adapter(Database):
         self,
         table_name: str,
         columns: list[str],
-        pk_column: str,
+        pk_columns: list[str],
         pk_values: list[Any],
     ) -> list[dict[str, Any]]:
-        """Fetch specific rows by primary key values."""
+        """Fetch specific rows by primary key values.
+
+        For single-column PKs, *pk_values* is a flat list of scalars.
+        For composite PKs, *pk_values* is a list of tuples.
+        Uses VALUES JOIN for composite keys (DB2 does not support
+        row-value IN syntax).
+        """
         if not pk_values:
             return []
         fqn = f"{_uc(self.schema)}.{_uc(table_name)}"
         col_list = ", ".join(_uc(c) for c in columns)
-        placeholders = ", ".join("?" for _ in pk_values)
-        sql = (
-            f"SELECT {col_list} FROM {fqn} "  # noqa: S608
-            f"WHERE {_uc(pk_column)} IN ({placeholders})"
-        )
         conn = self._ensure_connected()
         cursor = conn.cursor()
+
         try:
-            cursor.execute(sql, tuple(pk_values))
+            if len(pk_columns) == 1:
+                # Single-column: simple IN clause
+                placeholders = ", ".join("?" for _ in pk_values)
+                sql = (
+                    f"SELECT {col_list} FROM {fqn} "  # noqa: S608
+                    f"WHERE {_uc(pk_columns[0])} IN ({placeholders})"
+                )
+                cursor.execute(sql, tuple(pk_values))
+            else:
+                # Composite: use INNER JOIN with VALUES for batches > 50,
+                # OR-chained AND conditions for smaller batches
+                if len(pk_values) <= 50:
+                    sql = self._composite_fetch_or_chain(
+                        fqn, col_list, pk_columns, pk_values
+                    )
+                    # Flatten params
+                    params = tuple(v for row in pk_values for v in row)
+                    cursor.execute(sql, params)
+                else:
+                    sql = self._composite_fetch_values_join(
+                        fqn, col_list, pk_columns, pk_values
+                    )
+                    params = tuple(v for row in pk_values for v in row)
+                    cursor.execute(sql, params)
+
             col_names = [_lc(c) for c in columns]
             return [
                 dict(zip(col_names, self._normalise_row(row)))
@@ -567,15 +593,56 @@ class DB2Adapter(Database):
         finally:
             cursor.close()
 
+    def _composite_fetch_or_chain(
+        self,
+        fqn: str,
+        col_list: str,
+        pk_columns: list[str],
+        pk_values: list[Any],
+    ) -> str:
+        """Build WHERE (c1=? AND c2=?) OR (c1=? AND c2=?) ... for small batches."""
+        conditions = []
+        for _ in pk_values:
+            and_parts = " AND ".join(f"{_uc(c)} = ?" for c in pk_columns)
+            conditions.append(f"({and_parts})")
+        where = " OR ".join(conditions)
+        return f"SELECT {col_list} FROM {fqn} WHERE {where}"  # noqa: S608
+
+    def _composite_fetch_values_join(
+        self,
+        fqn: str,
+        col_list: str,
+        pk_columns: list[str],
+        pk_values: list[Any],
+    ) -> str:
+        """Build INNER JOIN (VALUES (...)) AS V(C1,C2) for large batches."""
+        n_cols = len(pk_columns)
+        row_placeholder = "(" + ", ".join("?" for _ in range(n_cols)) + ")"
+        values_list = ", ".join(row_placeholder for _ in pk_values)
+        v_cols = ", ".join(f"V{i}" for i in range(n_cols))
+        join_cond = " AND ".join(
+            f"T.{_uc(pk_columns[i])} = V.V{i}" for i in range(n_cols)
+        )
+        return (
+            f"SELECT {col_list} FROM {fqn} T "  # noqa: S608
+            f"INNER JOIN (VALUES {values_list}) AS V({v_cols}) ON {join_cond}"
+        )
+
     def stream_primary_keys(
         self,
         table_name: str,
-        pk_column: str,
+        pk_columns: list[str],
         batch_size: int = 10000,
-    ) -> Generator[list[int], None, None]:
-        """Yield sorted primary-key values in batches for delta comparison."""
+    ) -> Generator[list[Any], None, None]:
+        """Yield sorted primary-key values in batches for delta comparison.
+
+        For single-column PKs, yields lists of scalar values.
+        For composite PKs, yields lists of tuples.
+        """
         fqn = f"{_uc(self.schema)}.{_uc(table_name)}"
-        sql = f"SELECT {_uc(pk_column)} FROM {fqn} ORDER BY {_uc(pk_column)}"  # noqa: S608
+        col_list = ", ".join(_uc(c) for c in pk_columns)
+        order_clause = ", ".join(_uc(c) for c in pk_columns)
+        sql = f"SELECT {col_list} FROM {fqn} ORDER BY {order_clause}"  # noqa: S608
         conn = self._ensure_connected()
         cursor = conn.cursor()
         try:
@@ -584,7 +651,10 @@ class DB2Adapter(Database):
                 rows = cursor.fetchmany(batch_size)
                 if not rows:
                     break
-                yield [int(r[0]) for r in rows]
+                if len(pk_columns) == 1:
+                    yield [r[0] for r in rows]
+                else:
+                    yield [tuple(r) for r in rows]
         finally:
             cursor.close()
 
