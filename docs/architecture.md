@@ -305,6 +305,7 @@ See `docs/adding-a-database-adapter.md` for the full guide with a skeleton imple
 db-migration-toolkit/
 ├── README.md
 ├── pyproject.toml
+├── docker-compose.testcontainers.yml  # Local test containers (PG + Db2)
 ├── src/
 │   └── dbmigrate/
 │       ├── __init__.py
@@ -330,6 +331,7 @@ db-migration-toolkit/
 ├── checkpoints/                # Generated at runtime
 ├── docs/
 │   ├── architecture.md
+│   ├── integration-testing.md  # Integration test harness guide
 │   ├── progress.md
 │   ├── database-strategy.md
 │   ├── known-limitations.md
@@ -339,8 +341,43 @@ db-migration-toolkit/
     ├── test_profile.py
     ├── test_comparator.py
     ├── test_engine.py
-    └── test_adapters/
-        ├── test_postgresql.py
-        ├── test_db2.py
-        └── test_sqlite.py
+    ├── test_adapters/
+    │   ├── test_postgresql.py
+    │   ├── test_db2.py
+    │   └── test_sqlite.py
+    └── integration/
+        └── testcontainers/
+            ├── __init__.py
+            ├── conftest.py          # pytest fixtures
+            ├── containers.py        # Container classes (External + Testcontainer)
+            ├── mcp_fetcher.py       # Multi-source data fetcher (Db2/PG/embedded)
+            ├── schema_manager.py    # DDL + INSERT logic
+            ├── populate_test_dbs.py # CLI orchestrator
+            └── test_populated_dbs.py
 ```
+
+## Testing Strategy
+
+The project uses a layered testing approach:
+
+| Layer | Scope | Speed | Data Source |
+|-------|-------|-------|-------------|
+| Unit tests | Individual functions/classes | Fast | Mocked |
+| Integration tests | Full adapter + engine pipeline | Medium | Docker containers |
+| Validation tests | Post-migration correctness | Slow | Live dev databases |
+
+### Integration Test Infrastructure
+
+The integration test harness (`tests/integration/testcontainers/`) supports two modes:
+
+1. **Docker Compose mode** (`--use-compose`) — connects to pre-started containers defined in `docker-compose.testcontainers.yml`. Fastest for iterative development.
+2. **Testcontainers mode** (default) — Python manages container lifecycle automatically. Best for CI.
+
+Data can be sourced from:
+- **Dev Db2** (via `WA_TARGET_DSN`) — production-like data from the WEALTH schema
+- **Dev PG** (via `WA_SOURCE_DSN`) — the `wealthadapter` schema on the dev PG instance
+- **Embedded seed** — hardcoded minimal data for offline/CI environments
+
+Resolution order in `auto` mode: Db2 → PG → embedded (first available wins).
+
+See `docs/integration-testing.md` for the full setup and usage guide.

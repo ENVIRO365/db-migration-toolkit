@@ -24,6 +24,13 @@ test = [
     "pytest-cov>=5.0",
     "pytest-mock>=3.14",
 ]
+testcontainers = [
+    "testcontainers[postgres]>=4.7",
+    "psycopg2-binary>=2.9",
+    "ibm_db>=3.2",
+    "ibm_db_sa>=0.4",
+    "rich>=13.0",
+]
 
 [project.scripts]
 dbmigrate = "dbmigrate.cli:main"

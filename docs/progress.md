@@ -7,7 +7,7 @@
 | Gate 1 — Environment | PASSED | Python 3.12.3, PG MCP verified (cis-lh-adapter-dev), DB2 MCP verified (WEALTH), 66GB disk | 2026-08-24 |
 | Gate 2 — Database Discovery | PASSED | Source: 28 PG tables (26 business + 2 infra), Target: 26 DB2 tables. Identity strategies match. FK relationships verified. | 2026-08-24 |
 | Gate 3 — Rollback Design | PASSED | Architecture designed, 18 source files, all imports verified, adapter contract defined, dependency graph built | 2026-08-24 |
-| Gate 4 — Proof of Concept | PASSED | 120 unit + 27 integration tests pass. CLI compare/validate/plan work end-to-end against live PG+DB2. Delta strip for unauthorised DELETEs working. | 2026-08-24 |
+| Gate 4 — Proof of Concept | PASSED | 120 unit + 27 integration tests pass. CLI compare/validate/plan work end-to-end against live PG+DB2. Delta strip for unauthorised DELETEs working. Integration test harness with multi-source data fetching (Db2/PG/embedded) and docker-compose support verified. | 2026-08-26 |
 | Gate 5 — Performance | PENDING | | |
 | Gate 6 — Full Implementation | PENDING | | |
 | Gate 7 — Non-Production Validation | PENDING | | |
@@ -51,3 +51,18 @@
 ## Open Questions
 - DB2 LOAD utility access: verify if db2 CLI is available from the execution environment
 - DB2 TIMESTAMP fractional precision match
+
+## Integration Test Infrastructure (Gate 4 supplement)
+
+Delivered 2026-08-26:
+
+| Component | File | Description |
+|-----------|------|-------------|
+| Container classes | `tests/integration/testcontainers/containers.py` | `ExternalPgContainer`, `ExternalDb2Container` for docker-compose; original testcontainer wrappers preserved |
+| Multi-source fetcher | `tests/integration/testcontainers/mcp_fetcher.py` | Fetches from Db2 (`ibm_db`), PG (`psycopg2`), or embedded seed data |
+| CLI orchestrator | `tests/integration/testcontainers/populate_test_dbs.py` | `--use-compose`, `--source`, `--pg-only`, `--verbose` flags |
+| Docker Compose | `docker-compose.testcontainers.yml` | PG at :5433, Db2 at :50001 with healthchecks |
+
+Source resolution order: `WA_TARGET_DSN` (Db2) → `WA_SOURCE_DSN` (PG) → embedded seed.
+
+See `docs/integration-testing.md` for the full guide.

@@ -139,6 +139,7 @@ See `docs/adding-a-database-adapter.md` for the full guide with skeleton code an
 db-migration-toolkit/
 ├── README.md
 ├── pyproject.toml
+├── docker-compose.testcontainers.yml  # Local test containers
 ├── src/dbmigrate/          # Core library
 │   ├── cli.py              # Click CLI
 │   ├── profile.py          # Profile loader
@@ -155,13 +156,73 @@ db-migration-toolkit/
 ├── checkpoints/            # Runtime checkpoint files
 ├── docs/                   # Documentation
 └── tests/                  # Test suite
+    ├── test_*.py           # Unit tests
+    └── integration/
+        └── testcontainers/ # Integration test harness
+            ├── containers.py        # Container backends
+            ├── mcp_fetcher.py       # Multi-source data fetcher
+            ├── populate_test_dbs.py # CLI orchestrator
+            └── schema_manager.py    # DDL + INSERT logic
 ```
+
+## Integration Testing
+
+The toolkit ships with a full integration test harness that can run against:
+- **Docker Compose containers** (recommended for local dev)
+- **Python Testcontainers** (auto-managed, but slower startup)
+
+### Quick Start (Docker Compose)
+
+```bash
+# Start containers
+docker compose -f docker-compose.testcontainers.yml up -d --wait
+
+# Populate PostgreSQL with live dev data (from Db2 or PG, fallback to embedded)
+python -m tests.integration.testcontainers.populate_test_dbs --use-compose --pg-only
+
+# Run tests
+pytest tests/integration/testcontainers/
+
+# Tear down
+docker compose -f docker-compose.testcontainers.yml down -v
+```
+
+### Data Source Selection
+
+The `--source` flag controls where seed data comes from:
+
+| Source | Env Var Required | Description |
+|--------|-----------------|-------------|
+| `auto` (default) | None | Tries Db2 → PG → embedded in order |
+| `db2` | `WA_TARGET_DSN` | Fetches from dev Db2 (WEALTH schema) |
+| `pg` | `WA_SOURCE_DSN` | Fetches from dev PG (wealthadapter schema) |
+| `embedded` | None | Uses built-in seed data (CI/offline) |
+
+```bash
+# Explicit source selection
+python -m tests.integration.testcontainers.populate_test_dbs --use-compose --pg-only --source pg
+python -m tests.integration.testcontainers.populate_test_dbs --use-compose --pg-only --source embedded
+```
+
+### Container Defaults
+
+Docker Compose containers use these defaults (override via environment or `.env`):
+
+| Container | Host | Port | Database | User | Password |
+|-----------|------|------|----------|------|----------|
+| PostgreSQL | localhost | 5433 | wealth_test | testuser | testpassw0rd |
+| Db2 | localhost | 50001 | WLTHTEST | db2inst1 | testpassw0rd |
+
+Override with `COMPOSE_PG_*` / `COMPOSE_DB2_*` environment variables.
+
+See `docs/integration-testing.md` for the full guide.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | `docs/architecture.md` | System design, components, data flow |
+| `docs/integration-testing.md` | Integration test harness setup and usage |
 | `docs/database-strategy.md` | Wealth Adapter schema comparison and strategy |
 | `docs/progress.md` | Gate progress tracker |
 | `docs/known-limitations.md` | Limitations and unverified assumptions |

@@ -35,3 +35,9 @@ htmlcov/
 *.ixf
 checkpoints/
 exports/
+
+# Runtime logs
+logs/
+
+# Serena (local dev tool)
+.serena/

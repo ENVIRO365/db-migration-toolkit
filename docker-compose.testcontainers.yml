@@ -1,0 +1,77 @@
+# docker-compose.testcontainers.yml
+#
+# Alternative to Python Testcontainers for manual setup or CI environments.
+# Starts Db2 and PostgreSQL containers pre-configured for integration tests.
+#
+# Usage:
+#   docker compose -f docker-compose.testcontainers.yml up -d
+#   python -m tests.integration.testcontainers.populate_test_dbs --use-compose --pg-only
+#   docker compose -f docker-compose.testcontainers.yml down -v
+#
+# Flags:
+#   --use-compose       Connect to these containers (no lifecycle management)
+#   --pg-only           Only populate PostgreSQL (skip Db2)
+#   --source <mode>     Data source: auto | db2 | pg | embedded
+#                         auto     — try WA_TARGET_DSN (Db2), then WA_SOURCE_DSN (PG), then embedded
+#                         db2      — require WA_TARGET_DSN (dev Db2)
+#                         pg       — require WA_SOURCE_DSN (dev PG)
+#                         embedded — use built-in seed data (offline/CI)
+#   -v / --verbose      Enable DEBUG logging
+#
+# Environment overrides (in .env or shell):
+#   COMPOSE_PG_HOST, COMPOSE_PG_PORT, COMPOSE_PG_DB, COMPOSE_PG_USER, COMPOSE_PG_PASSWORD
+#   COMPOSE_DB2_HOST, COMPOSE_DB2_PORT, COMPOSE_DB2_DB, COMPOSE_DB2_USER, COMPOSE_DB2_PASSWORD
+#
+# Note: Db2 container takes 3-5 minutes to initialise.  Wait for the
+# healthcheck to pass before running tests:
+#   docker compose -f docker-compose.testcontainers.yml up -d --wait
+
+services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: wealth-pg-test
+    environment:
+      POSTGRES_DB: wealth_test
+      POSTGRES_USER: testuser
+      POSTGRES_PASSWORD: testpassw0rd
+    ports:
+      - "5433:5432"  # Host 5433 to avoid conflict with local PG
+    volumes:
+      - pg-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U testuser -d wealth_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── IBM Db2 ────────────────────────────────────────────────────────────
+  db2-test:
+    image: icr.io/db2_community/db2:latest
+    container_name: wealth-db2-test
+    privileged: true
+    environment:
+      LICENSE: accept
+      DB2INST1_PASSWORD: testpassw0rd
+      DBNAME: WLTHTEST
+      ARCHIVE_LOGS: "false"
+      AUTOCONFIG: "false"
+    ports:
+      - "50001:50000"  # Host 50001 to avoid conflict with local Db2
+    volumes:
+      - db2-test-data:/database
+    healthcheck:
+      # Wait for Db2 to complete setup (the setup script writes this marker)
+      test: ["CMD-SHELL", "su - db2inst1 -c 'db2 connect to WLTHTEST' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s  # Give Db2 2 min before even starting health checks
+    restart: unless-stopped
+
+volumes:
+  pg-test-data:
+    driver: local
+  db2-test-data:
+    driver: local
