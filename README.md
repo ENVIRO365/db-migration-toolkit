@@ -187,6 +187,20 @@ pytest tests/integration/testcontainers/
 docker compose -f docker-compose.testcontainers.yml down -v
 ```
 
+### Target Selection
+
+| Flag | Description |
+|------|-------------|
+| _(default)_ | Populate both PostgreSQL and Db2 |
+| `--pg-only` | Only populate PostgreSQL (skip Db2) |
+| `--db2-only` | Only populate Db2 (skip PostgreSQL) |
+
+`--pg-only` and `--db2-only` are mutually exclusive.
+
+The populate script always drops and recreates all tables in the selected
+target database(s) before inserting data, ensuring a clean slate on every
+run.
+
 ### Data Source Selection
 
 The `--source` flag controls where seed data comes from:
@@ -202,6 +216,9 @@ The `--source` flag controls where seed data comes from:
 # Explicit source selection
 python -m tests.integration.testcontainers.populate_test_dbs --use-compose --pg-only --source pg
 python -m tests.integration.testcontainers.populate_test_dbs --use-compose --pg-only --source embedded
+
+# Db2 target only
+python -m tests.integration.testcontainers.populate_test_dbs --use-compose --db2-only --source embedded
 ```
 
 ### Container Defaults

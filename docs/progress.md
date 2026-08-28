@@ -60,7 +60,7 @@ Delivered 2026-08-26:
 |-----------|------|-------------|
 | Container classes | `tests/integration/testcontainers/containers.py` | `ExternalPgContainer`, `ExternalDb2Container` for docker-compose; original testcontainer wrappers preserved |
 | Multi-source fetcher | `tests/integration/testcontainers/mcp_fetcher.py` | Fetches from Db2 (`ibm_db`), PG (`psycopg2`), or embedded seed data |
-| CLI orchestrator | `tests/integration/testcontainers/populate_test_dbs.py` | `--use-compose`, `--source`, `--pg-only`, `--verbose` flags |
+| CLI orchestrator | `tests/integration/testcontainers/populate_test_dbs.py` | `--use-compose`, `--source`, `--pg-only`, `--db2-only`, `--verbose` flags. Drops and recreates all target tables before inserting (clean slate). |
 | Docker Compose | `docker-compose.testcontainers.yml` | PG at :5433, Db2 at :50001 with healthchecks |
 
 Source resolution order: `WA_TARGET_DSN` (Db2) → `WA_SOURCE_DSN` (PG) → embedded seed.

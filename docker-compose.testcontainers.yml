@@ -11,12 +11,17 @@
 # Flags:
 #   --use-compose       Connect to these containers (no lifecycle management)
 #   --pg-only           Only populate PostgreSQL (skip Db2)
+#   --db2-only          Only populate Db2 (skip PostgreSQL)
 #   --source <mode>     Data source: auto | db2 | pg | embedded
 #                         auto     — try WA_TARGET_DSN (Db2), then WA_SOURCE_DSN (PG), then embedded
 #                         db2      — require WA_TARGET_DSN (dev Db2)
 #                         pg       — require WA_SOURCE_DSN (dev PG)
 #                         embedded — use built-in seed data (offline/CI)
 #   -v / --verbose      Enable DEBUG logging
+#
+# Note: The populate script always drops and recreates all tables in the
+# target database(s) before inserting data, ensuring a clean slate on
+# every run.  Use --pg-only or --db2-only to limit which targets are reset.
 #
 # Environment overrides (in .env or shell):
 #   COMPOSE_PG_HOST, COMPOSE_PG_PORT, COMPOSE_PG_DB, COMPOSE_PG_USER, COMPOSE_PG_PASSWORD

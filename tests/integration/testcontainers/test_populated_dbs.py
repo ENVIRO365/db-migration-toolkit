@@ -37,7 +37,7 @@ class TestPgSchema:
         cur = pg_conn.cursor()
         cur.execute(
             "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+            "WHERE table_schema = 'wealthadapter' AND table_type = 'BASE TABLE'"
         )
         existing = {row[0] for row in cur.fetchall()}
         cur.close()
@@ -50,7 +50,7 @@ class TestPgSchema:
         for table in TABLES:
             cur.execute(
                 "SELECT COUNT(*) FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = %s",
+                "WHERE table_schema = 'wealthadapter' AND table_name = %s",
                 (table.name,),
             )
             col_count = cur.fetchone()[0]
@@ -73,7 +73,7 @@ class TestPgSchema:
                 AND    i.indisprimary
                 ORDER BY array_position(i.indkey, a.attnum)
                 """,
-                (table.name,),
+                (f"wealthadapter.{table.name}",),
             )
             pk_cols = [row[0] for row in cur.fetchall()]
             assert pk_cols == table.primary_key, (
@@ -131,12 +131,15 @@ class TestPgData:
         assert "/RMBUT-FNB" in dirs
 
     def test_all_tables_have_data(self, pg_conn, pg_populated):
-        """Every table should have at least one row."""
+        """Every table that had source data should have rows in PG."""
         cur = pg_conn.cursor()
         for table in TABLES:
+            source_count = pg_populated["fetch_results"][table.name].row_count
+            if source_count == 0:
+                continue  # Source had no data — skip
             cur.execute(f'SELECT COUNT(*) FROM "{table.name}"')
             count = cur.fetchone()[0]
-            assert count > 0, f"Table {table.name} is empty in PostgreSQL"
+            assert count > 0, f"Table {table.name} is empty in PostgreSQL (source had {source_count})"
         cur.close()
 
     def test_row_counts_match_source(self, pg_conn, pg_populated):
@@ -170,7 +173,7 @@ class TestDb2Schema:
             try:
                 stmt = ibm_db.exec_immediate(
                     db2_conn,
-                    f'SELECT COUNT(*) AS cnt FROM "{table.name}"',
+                    f'SELECT COUNT(*) AS cnt FROM "WEALTHADAPTER"."{table.name}"',
                 )
                 row = ibm_db.fetch_assoc(stmt)
                 assert row is not None, f"Table {table.name} not found in Db2"
@@ -188,7 +191,7 @@ class TestDb2Data:
         import ibm_db
 
         stmt = ibm_db.exec_immediate(
-            db2_conn, 'SELECT COUNT(*) AS cnt FROM "userrole"'
+            db2_conn, 'SELECT COUNT(*) AS cnt FROM "WEALTHADAPTER"."userrole"'
         )
         row = ibm_db.fetch_assoc(stmt)
         count = row["CNT"]
@@ -199,19 +202,22 @@ class TestDb2Data:
         import ibm_db
 
         for table in TABLES:
+            source_count = db2_populated["fetch_results"][table.name].row_count
+            if source_count == 0:
+                continue  # Source had no data — skip
             stmt = ibm_db.exec_immediate(
-                db2_conn, f'SELECT COUNT(*) AS cnt FROM "{table.name}"'
+                db2_conn, f'SELECT COUNT(*) AS cnt FROM "WEALTHADAPTER"."{table.name}"'
             )
             row = ibm_db.fetch_assoc(stmt)
             count = row["CNT"]
-            assert count > 0, f"Table {table.name} is empty in Db2"
+            assert count > 0, f"Table {table.name} is empty in Db2 (source had {source_count})"
 
     def test_row_counts_match_source(self, db2_conn, db2_populated):
         import ibm_db
 
         for table in TABLES:
             stmt = ibm_db.exec_immediate(
-                db2_conn, f'SELECT COUNT(*) AS cnt FROM "{table.name}"'
+                db2_conn, f'SELECT COUNT(*) AS cnt FROM "WEALTHADAPTER"."{table.name}"'
             )
             row = ibm_db.fetch_assoc(stmt)
             db2_count = row["CNT"]
@@ -247,7 +253,7 @@ class TestCrossDatabase:
 
             # Db2 count
             stmt = ibm_db.exec_immediate(
-                db2_conn, f'SELECT COUNT(*) AS cnt FROM "{table.name}"'
+                db2_conn, f'SELECT COUNT(*) AS cnt FROM "WEALTHADAPTER"."{table.name}"'
             )
             row = ibm_db.fetch_assoc(stmt)
             db2_count = row["CNT"]

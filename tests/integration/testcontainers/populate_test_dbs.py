@@ -8,6 +8,9 @@ Usage:
   # PostgreSQL only (skip Db2 container, which is slow):
   python -m tests.integration.testcontainers.populate_test_dbs --pg-only
 
+  # Db2 only (skip PostgreSQL container):
+  python -m tests.integration.testcontainers.populate_test_dbs --db2-only
+
   # Use embedded seed data (no MCP / Db2 source connection needed):
   python -m tests.integration.testcontainers.populate_test_dbs --embedded
 
@@ -60,6 +63,8 @@ from tests.integration.testcontainers.schema_manager import (
     VerificationResult,
     create_schema_db2,
     create_schema_postgres,
+    drop_all_db2,
+    drop_all_postgres,
     insert_rows_db2,
     insert_rows_postgres,
     verify_all,
@@ -90,11 +95,18 @@ class RunReport:
         if self.errors:
             return False
         if self.verification:
-            return all(v.pg_match for v in self.verification)
+            pg_ok = self.pg_rows_inserted is None or all(v.pg_match for v in self.verification)
+            db2_ok = self.db2_rows_inserted is None or all(v.db2_match for v in self.verification)
+            return pg_ok and db2_ok
         return False
 
 
-def _print_report(report: RunReport, *, include_db2: bool = True) -> None:
+def _print_report(
+    report: RunReport,
+    *,
+    include_db2: bool = True,
+    include_pg: bool = True,
+) -> None:
     """Print a rich summary table."""
     console.print()
     console.rule("[bold cyan]Testcontainers Population Report")
@@ -120,12 +132,15 @@ def _print_report(report: RunReport, *, include_db2: bool = True) -> None:
     if report.pg_rows_inserted or report.db2_rows_inserted:
         t = RichTable(title="Rows Inserted", show_lines=True)
         t.add_column("Table", style="cyan")
-        t.add_column("PostgreSQL", justify="right")
+        if include_pg:
+            t.add_column("PostgreSQL", justify="right")
         if include_db2:
             t.add_column("Db2", justify="right")
         for table in TABLES:
-            pg_count = (report.pg_rows_inserted or {}).get(table.name, "-")
-            row_data = [table.name, str(pg_count)]
+            row_data = [table.name]
+            if include_pg:
+                pg_count = (report.pg_rows_inserted or {}).get(table.name, "-")
+                row_data.append(str(pg_count))
             if include_db2:
                 db2_count = (report.db2_rows_inserted or {}).get(table.name, "-")
                 row_data.append(str(db2_count))
@@ -137,14 +152,17 @@ def _print_report(report: RunReport, *, include_db2: bool = True) -> None:
         t = RichTable(title="Verification", show_lines=True)
         t.add_column("Table", style="cyan")
         t.add_column("Source", justify="right")
-        t.add_column("PG", justify="right")
-        t.add_column("PG Match")
+        if include_pg:
+            t.add_column("PG", justify="right")
+            t.add_column("PG Match")
         if include_db2:
             t.add_column("Db2", justify="right")
             t.add_column("Db2 Match")
         for v in report.verification:
-            pg_match = "[green]YES" if v.pg_match else "[red]NO"
-            row_data = [v.table_name, str(v.source_count), str(v.pg_count), pg_match]
+            row_data = [v.table_name, str(v.source_count)]
+            if include_pg:
+                pg_match = "[green]YES" if v.pg_match else "[red]NO"
+                row_data.extend([str(v.pg_count), pg_match])
             if include_db2:
                 db2_match = "[green]YES" if v.db2_match else "[red]NO"
                 row_data.extend([str(v.db2_count), db2_match])
@@ -170,6 +188,7 @@ def _print_report(report: RunReport, *, include_db2: bool = True) -> None:
 def run(
     *,
     pg_only: bool = False,
+    db2_only: bool = False,
     use_embedded: bool = False,
     use_compose: bool = False,
     source: str = "auto",
@@ -181,6 +200,8 @@ def run(
     ----------
     pg_only:
         Skip Db2 container (PostgreSQL only).
+    db2_only:
+        Skip PostgreSQL container (Db2 only).
     use_embedded:
         Use embedded seed data instead of fetching from MCP.
     use_compose:
@@ -191,6 +212,8 @@ def run(
     db2_dsn:
         Explicit DSN for the source Db2 data fetch.
     """
+    if pg_only and db2_only:
+        raise ValueError("Cannot specify both pg_only and db2_only.")
     report = RunReport(started_at=datetime.now(tz=timezone.utc), errors=[])
 
     db2_container: Db2Container | ExternalDb2Container | None = None
@@ -203,15 +226,16 @@ def run(
     try:
         # ── Step 1: Start containers ─────────────────────────────────────
         mode_label = "docker-compose" if use_compose else "testcontainers"
-        console.print(f"[bold]Step 1/5: Starting containers ({mode_label}) …")
+        console.print(f"[bold]Step 1/6: Starting containers ({mode_label}) …")
 
-        if use_compose:
-            pg_container = ExternalPgContainer()
-            pg_container.start()
-        else:
-            pg_container = PgContainer()
-            pg_container.start()
-        console.print(f"  PostgreSQL ready at {pg_container.host}:{pg_container.port}")
+        if not db2_only:
+            if use_compose:
+                pg_container = ExternalPgContainer()
+                pg_container.start()
+            else:
+                pg_container = PgContainer()
+                pg_container.start()
+            console.print(f"  PostgreSQL ready at {pg_container.host}:{pg_container.port}")
 
         if not pg_only:
             try:
@@ -232,7 +256,7 @@ def run(
                 db2_container = None
 
         # ── Step 2: Fetch data ───────────────────────────────────────────
-        console.print("[bold]Step 2/5: Fetching data from source …")
+        console.print("[bold]Step 2/6: Fetching data from source …")
 
         fetch_results = fetch_all_tables(
             use_embedded=use_embedded,
@@ -247,16 +271,31 @@ def run(
         total_rows = sum(r.row_count for r in fetch_results.values())
         console.print(f"  Fetched {total_rows} total rows across {len(fetch_results)} tables.")
 
-        # ── Step 3: Create schemas ───────────────────────────────────────
-        console.print("[bold]Step 3/5: Creating schemas …")
+        # ── Step 3: Drop existing data ───────────────────────────────────
+        console.print("[bold]Step 3/6: Dropping existing tables (clean slate) …")
 
         import psycopg2
 
-        pg_conn = psycopg2.connect(pg_container.get_dsn())
-        report.pg_tables_created = create_schema_postgres(pg_conn)
-        console.print(
-            f"  PostgreSQL: {len(report.pg_tables_created)} tables created."
-        )
+        pg_conn = None
+        if not db2_only:
+            assert pg_container is not None  # guaranteed when not db2_only
+            pg_conn = psycopg2.connect(pg_container.get_dsn())
+            dropped_pg = drop_all_postgres(pg_conn)
+            console.print(
+                f"  PostgreSQL: {len(dropped_pg)} tables dropped."
+            )
+        else:
+            console.print("  PostgreSQL: skipped (--db2-only).")
+
+        # Db2 drop happens below, after connecting (if applicable)
+
+        # ── Step 4: Create schemas ───────────────────────────────────────
+        console.print("[bold]Step 4/6: Creating schemas …")
+        if pg_conn is not None:
+            report.pg_tables_created = create_schema_postgres(pg_conn)
+            console.print(
+                f"  PostgreSQL: {len(report.pg_tables_created)} tables created."
+            )
 
         db2_conn = None
         if db2_container is not None:
@@ -283,16 +322,24 @@ def run(
                     )
                     time.sleep(5)
 
+            # Drop existing Db2 tables before recreating
+            dropped_db2 = drop_all_db2(db2_conn)
+            console.print(
+                f"  Db2: {len(dropped_db2)} tables dropped."
+            )
+
             report.db2_tables_created = create_schema_db2(db2_conn)
             console.print(
                 f"  Db2: {len(report.db2_tables_created)} tables created."
             )
 
-        # ── Step 4: Insert data ──────────────────────────────────────────
-        console.print("[bold]Step 4/5: Inserting data …")
+        # ── Step 5: Insert data ──────────────────────────────────────────
+        console.print("[bold]Step 5/6: Inserting data …")
 
-        report.pg_rows_inserted = {}
-        report.db2_rows_inserted = {}
+        if pg_conn is not None:
+            report.pg_rows_inserted = {}
+        if db2_conn is not None:
+            report.db2_rows_inserted = {}
 
         for table_def in TABLES:
             fetch = fetch_results.get(table_def.name)
@@ -301,15 +348,16 @@ def run(
                 continue
 
             # PostgreSQL insert
-            try:
-                count = insert_rows_postgres(pg_conn, table_def, fetch.rows)
-                report.pg_rows_inserted[table_def.name] = count
-                console.print(f"  PG  {table_def.name}: {count} rows")
-            except Exception as exc:
-                msg = f"PG insert {table_def.name} failed: {exc}"
-                logger.error(msg)
-                report.errors.append(msg)
-                report.pg_rows_inserted[table_def.name] = 0
+            if pg_conn is not None:
+                try:
+                    count = insert_rows_postgres(pg_conn, table_def, fetch.rows)
+                    report.pg_rows_inserted[table_def.name] = count
+                    console.print(f"  PG  {table_def.name}: {count} rows")
+                except Exception as exc:
+                    msg = f"PG insert {table_def.name} failed: {exc}"
+                    logger.error(msg)
+                    report.errors.append(msg)
+                    report.pg_rows_inserted[table_def.name] = 0
 
             # Db2 insert
             if db2_conn is not None:
@@ -323,11 +371,14 @@ def run(
                     report.errors.append(msg)
                     report.db2_rows_inserted[table_def.name] = 0
 
-        # ── Step 5: Verify ───────────────────────────────────────────────
-        console.print("[bold]Step 5/5: Verifying row counts …")
+        # ── Step 6: Verify ───────────────────────────────────────────────
+        console.print("[bold]Step 6/6: Verifying row counts …")
 
         source_counts = {name: r.row_count for name, r in fetch_results.items()}
-        pg_counts = verify_row_counts_postgres(pg_conn)
+
+        pg_counts: dict[str, int] = {}
+        if pg_conn is not None:
+            pg_counts = verify_row_counts_postgres(pg_conn)
 
         db2_counts: dict[str, int] = {}
         if db2_conn is not None:
@@ -338,7 +389,8 @@ def run(
         mismatches = [
             v
             for v in report.verification
-            if not v.pg_match or (db2_container and not v.db2_match)
+            if (pg_conn is not None and not v.pg_match)
+            or (db2_container and not v.db2_match)
         ]
         if mismatches:
             for m in mismatches:
@@ -348,7 +400,8 @@ def run(
                 )
 
         # ── Cleanup connections ──────────────────────────────────────────
-        pg_conn.close()
+        if pg_conn is not None:
+            pg_conn.close()
         if db2_conn is not None:
             import ibm_db
 
@@ -374,6 +427,11 @@ def main() -> None:
         "--pg-only",
         action="store_true",
         help="Skip Db2 container (PostgreSQL only).",
+    )
+    parser.add_argument(
+        "--db2-only",
+        action="store_true",
+        help="Skip PostgreSQL container (Db2 only).",
     )
     parser.add_argument(
         "--embedded",
@@ -418,15 +476,23 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
+    if args.pg_only and args.db2_only:
+        parser.error("--pg-only and --db2-only are mutually exclusive.")
+
     report = run(
         pg_only=args.pg_only,
+        db2_only=args.db2_only,
         use_embedded=args.embedded,
         use_compose=args.use_compose,
         source=args.source,
         db2_dsn=args.db2_dsn,
     )
 
-    _print_report(report, include_db2=not args.pg_only)
+    _print_report(
+        report,
+        include_db2=not args.pg_only,
+        include_pg=not args.db2_only,
+    )
 
     # Cleanup containers (no-op for compose mode)
     if not args.use_compose:

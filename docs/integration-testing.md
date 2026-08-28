@@ -22,13 +22,28 @@ The integration test harness populates local database containers with real (or e
 └───────────────────────────┬──────────────────────────────┘
                             ▼
 ┌──────────────────────────────────────────────────────────┐
+│           Target Selection                                 │
+│  (default)     → Both PG + Db2                            │
+│  --pg-only     → PostgreSQL only (skip Db2)               │
+│  --db2-only    → Db2 only (skip PostgreSQL)               │
+└───────────────────────────┬──────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────┐
 │           Schema + Data Population                         │
-│  1. Create schema (DDL)                                   │
-│  2. Insert fetched rows                                   │
-│  3. Verify row counts                                     │
-│  4. Print summary report                                  │
+│  1. Fetch data from source                                │
+│  2. Drop all existing tables (clean slate)                │
+│  3. Create schema (DDL)                                   │
+│  4. Insert fetched rows                                   │
+│  5. Verify row counts                                     │
+│  6. Print summary report                                  │
 └──────────────────────────────────────────────────────────┘
 ```
+
+> **Clean slate**: The populate script always drops and recreates all tables
+> in the selected target database(s) before inserting data. This guarantees
+> idempotent runs — no duplicate rows or stale data from previous invocations.
+> Only the target(s) specified by `--pg-only` / `--db2-only` are dropped; the
+> other database is left untouched.
 
 ## Prerequisites
 
@@ -82,9 +97,12 @@ docker compose -f docker-compose.testcontainers.yml down -v
 |------|-------------|
 | `--use-compose` | Connect to docker-compose containers (no lifecycle management) |
 | `--pg-only` | Only populate PostgreSQL (skip Db2 target) |
+| `--db2-only` | Only populate Db2 (skip PostgreSQL target) |
 | `--source <mode>` | Data source: `auto`, `db2`, `pg`, `embedded` |
 | `--embedded` | Shorthand for `--source embedded` |
 | `-v` / `--verbose` | Enable DEBUG-level logging |
+
+> `--pg-only` and `--db2-only` are mutually exclusive.
 
 ## Data Source Resolution
 
@@ -231,6 +249,7 @@ pip install ibm_db
 Note: `ibm_db` requires the IBM CLIDRIVER. On Linux it's bundled with the pip package.
 
 ### Stale Data After Re-run
-The populate script uses INSERT (not UPSERT). If tables already have data from a previous run, either:
-- Drop and recreate: `docker compose -f docker-compose.testcontainers.yml down -v && docker compose -f docker-compose.testcontainers.yml up -d`
-- Or truncate tables manually before re-running
+This is no longer an issue. The populate script automatically drops and
+recreates all tables in the target database(s) before inserting data,
+ensuring a clean slate on every run. No manual truncation or volume
+removal is required between runs.

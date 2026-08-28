@@ -28,6 +28,8 @@ from tests.integration.testcontainers.schema_manager import (
     TABLES,
     create_schema_db2,
     create_schema_postgres,
+    drop_all_db2,
+    drop_all_postgres,
     insert_rows_db2,
     insert_rows_postgres,
 )
@@ -78,17 +80,25 @@ def pg_conn(pg_container):
     import psycopg2
 
     conn = psycopg2.connect(pg_container.get_dsn())
+    cur = conn.cursor()
+    cur.execute("SET search_path TO wealthadapter, public")
+    conn.commit()
+    cur.close()
     yield conn
     conn.close()
 
 
 @pytest.fixture(scope="module")
 def pg_populated(pg_conn):
-    """Create schema and populate PostgreSQL with test data.
+    """Drop, recreate schema, and populate PostgreSQL with test data.
+
+    Always drops existing tables first to ensure a clean slate,
+    then creates the schema and inserts rows.
 
     Returns the fetch results dict for verification.
     """
     fetch_results = fetch_all_tables(use_embedded=True)
+    drop_all_postgres(pg_conn)
     create_schema_postgres(pg_conn)
 
     inserted = {}
@@ -134,8 +144,13 @@ def db2_conn(db2_container):
 
 @pytest.fixture(scope="module")
 def db2_populated(db2_conn):
-    """Create schema and populate Db2 with test data."""
+    """Drop, recreate schema, and populate Db2 with test data.
+
+    Always drops existing tables first to ensure a clean slate,
+    then creates the schema and inserts rows.
+    """
     fetch_results = fetch_all_tables(use_embedded=True)
+    drop_all_db2(db2_conn)
     create_schema_db2(db2_conn)
 
     inserted = {}

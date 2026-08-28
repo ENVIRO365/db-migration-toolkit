@@ -373,6 +373,8 @@ The integration test harness (`tests/integration/testcontainers/`) supports two 
 1. **Docker Compose mode** (`--use-compose`) — connects to pre-started containers defined in `docker-compose.testcontainers.yml`. Fastest for iterative development.
 2. **Testcontainers mode** (default) — Python manages container lifecycle automatically. Best for CI.
 
+Target selection flags (`--pg-only`, `--db2-only`) control which databases are populated. The populate script always drops and recreates all tables in the selected target(s) before inserting data, ensuring idempotent runs.
+
 Data can be sourced from:
 - **Dev Db2** (via `WA_TARGET_DSN`) — production-like data from the WEALTH schema
 - **Dev PG** (via `WA_SOURCE_DSN`) — the `wealthadapter` schema on the dev PG instance
